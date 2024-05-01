@@ -1,0 +1,802 @@
+---
+title: "Modèles de classification appliquées au marketing bancaire"
+author: "Charbel AHOUANDOKOUN, Nazifou AFOLABI"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    df_print: paged
+    toc: true
+    toc_float: true
+    toc_depth: 6
+  pdf_document:
+    keep_tex: true
+header-includes:
+  - \usepackage{fancyhdr}
+  - \usepackage{graphicx}
+  - \pagestyle{fancy}
+  - \fancyhead{}
+  - \fancyfoot[C]{\thepage}
+  - \fancyfoot[R]{\textbf{\large Mécen 1}}
+  - \fancyfoot[L]{\textbf{\large Datamining}}
+geometry:
+  margin=1.5cm
+fontsize: 11pt
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message=FALSE,warning = FALSE, cache=TRUE)
+```
+
+```{r, packages}
+library(readr)
+library(rsample)
+library(tidymodels)
+library(discrim)
+library(caret)
+library(rpart)
+library(randomForest)
+library(xgboost)
+library(kableExtra)
+library(gtsummary)
+library(mlogit)
+library(ggplot2)
+library(pROC)
+```
+
+
+```{r, Bases}
+set.seed(1)
+train<-read.csv2("train.csv", stringsAsFactors = TRUE)
+```
+
+```{r, échantillonnage}
+data_split <- train |>  initial_split(prop = 2/3)
+test_data <- data_split |>  testing()
+train_data <- data_split |>  training()
+```
+
+
+# I- Etude:
+
+## 1- Base de données:
+
+La présente étude porte sur les données liées aux campagnes de marketing direct d’une institution bancaire portugaise en 2014. L’objectif de la classification est de prédire si le client souscrira un dépôt à terme (variable y). Elle est accessible en ligne, [ici](https://archive.ics.uci.edu/ml/datasets/Bank+Marketing). Elle contient `r nrow(train)` observations de `r ncol(train)`. Les observations manquantes sont codées comme modalité $unknown$ pour chaque variables.
+
+## 2-  Statistiques descriptives:
+
+### - Variables quantitatives
+
+  Le tableau ci-dessous présente les principales grandeurs statistiques des variables quantitatives de notre base de données.
+
+```{r}
+Sum_quant<-data.frame(
+  Statistiques=c("Minimum", "1er Quartile", "Médiane", "Moyenne", "3è Quartile", "Maximum"),
+  Age= c(summary(train$age)[1],summary(train$age)[2],summary(train$age)[3],summary(train$age)[4],summary(train$age)[5],summary(train$age)[6]),
+  Balance=c(summary(train$balance)[1],summary(train$balance)[2],summary(train$balance)[3],summary(train$balance)[4],summary(train$balance)[5],summary(train$balance)[6]),
+  Day=c(summary(train$day)[1],summary(train$day)[2],summary(train$day)[3],summary(train$day)[4],summary(train$day)[5],summary(train$day)[6]),
+  Duration=c(summary(train$duration)[1],summary(train$duration)[2],summary(train$duration)[3],summary(train$age)[4],summary(train$duration)[5],summary(train$duration)[6]),
+  Campaign= c(summary(train$campaign)[1],summary(train$campaign)[2],summary(train$campaign)[3],summary(train$campaign)[4],summary(train$campaign)[5],summary(train$campaign)[6]),
+  Pdays= c(summary(train$pdays)[1],summary(train$pdays)[2],summary(train$pdays)[3],summary(train$pdays)[4],summary(train$pdays)[5],summary(train$pdays)[6]),
+  Previous=c(summary(train$previous)[1],summary(train$previous)[2],summary(train$previous)[3],summary(train$previous)[4],summary(train$previous)[5],summary(train$previous)[6]))
+
+Sum_quant[,-1]<-Sum_quant[,-1] |> round(2)
+
+row.names(Sum_quant)<-NULL
+
+Sum_quant |> kable( caption ="Stats descriptives-Variables quantitatives") |>  kable_styling(latex_options = c("striped", "hold_position"),position="center")
+```
+### - Variables qualitatives
+
+  Les proportions de chaque modalité selon que les individus aient contracté ou pas un dépôt à terme sont présentées dans le tableau ci-dessous. 
+
+```{r}
+train[,c(2:5,7:9,16,17)] |> tbl_summary(by=y, percent = "row")
+```
+
+#### Lecture du tableau
+  Comme exemple du sens de lecture du tableau on peut dire:
+  
+  - $29$% des étudiants ($student$) ont pas accepté faire un dépôt à terme, contre seulement $7,3$% chez les travailleurs manuel($blue-collar$).
+  - le plus fort taux de succès de la campagne selon le niveau d'éducation, $15$% est observé chez ceux ayant au moins un niveau universitaire, le plus faible ayant été enregistré chez les individus de niveau primaire ($8.6$%).
+ 
+\newpage
+
+# II- Modèles de type Analyse Factorielles Discriminantes
+
+  Nous allons déployer ici, les modèles de classification tel que l'**Analyse Linéaire Discriminante** ($LDA$) et l'**Analyse Quadratique Discriminante** ($QDA$).
+  
+<!--Section 1-->
+
+## 1- LDA
+
+   Le présent tableau représente le résumé de la classification des individus selon notre modèle, elle confronte les prédictions de notre modèle aux données de notre base. 
+   
+```{r}
+
+# Modèle 
+lda_spec <- discrim_linear() |> 
+  set_mode("classification") |> 
+  set_engine("MASS")
+#Classification 
+lda_fit<- lda_spec |> 
+  fit(y~.,data=train_data)
+
+```
+
+```{r, results='asis', before='\\begin{table}[ht]',after='\\end{table}\\clearpage'}
+# Matrice de confusion
+tab<-augment(lda_fit,new_data=test_data) |>  conf_mat(truth=y,estimat= .pred_class)
+Table<-tab$table |> addmargins()
+Table |> kable(caption = "Matrice de confusion - LDA") |> 
+  add_header_above(c("Prediction","Realité "=2," ")) |>  kable_styling(bootstrap_options = c("hover","striped"),pos="c", full_width = F)
+
+
+lda_predictions <- predict(lda_fit, test_data)
+lda_accuracy <- sum(lda_predictions$.pred_class == test_data$y) / length(test_data$y)
+#lda_accuracy
+
+
+lda_train_pred <- predict(lda_fit, train_data)
+lda_train_accuracy <- sum(lda_train_pred$.pred_class == train_data$y) / length(train_data$y)
+#lda_train_accuracy
+
+
+```
+```{r}
+lda_rec<-  recipe(y~.,data=train_data)
+lda_wf <- workflow() %>%
+add_model(lda_spec) %>%
+add_recipe(lda_rec)
+
+lda_wkfl_final <-last_fit(lda_wf,split=data_split)
+tab_result<-lda_wkfl_final %>% collect_predictions()
+
+lda_roc<- roc(tab_result$y,tab_result$.pred_yes) %>% auc()
+```
+
+A partir de ce tableau, on peut relever la $sensibilité$ (les $yes$ correctement classés par notre modèle) qui est de `r round(100*(Table[2,2]/Table[3,2]),2)`% et la $spécificité$ (les $no$ correctement prédits) évalué à `r round(100*(Table[1,1]/Table[3,1]),2)`%.
+
+<!-- Section 2-->
+## 2- QDA
+ Nous présentons ici la même matrice, pour le modèle $QDA$.
+```{r}
+# Modèle 
+qda_spec <- discrim_quad() |> 
+  set_mode("classification") |> 
+  set_engine("MASS")
+#Classification 
+qda_fit<- qda_spec |> 
+  fit(y~.,data=train_data)
+```
+
+
+```{r, results='asis', before='\\begin{table}[ht]',after='\\end{table}\\clearpage'}
+tab<-augment(qda_fit,new_data=test_data) |>  conf_mat(truth=y,estimat= .pred_class)
+Table<- tab$table |> addmargins()
+
+
+Table |> kable(caption = "Matrice de confusion - QDA") |> 
+  add_header_above(c("Prediction","Realité "=2," ")) |>  kable_styling(bootstrap_options = c("hover","striped"),pos="c", full_width = F)
+  
+
+# Précision
+qda_predictions <- predict(qda_fit, test_data)
+qda_accuracy <- sum(qda_predictions$.pred_class == test_data$y) / length(test_data$y)
+#qda_accuracy
+
+
+qda_train_pred <- predict(qda_fit, train_data)
+qda_train_accuracy <- sum(qda_train_pred$.pred_class == train_data$y) / length(train_data$y)
+#qda_train_accuracy
+```
+
+
+```{r}
+
+qda_wf <- workflow() %>%
+add_model(qda_spec) %>%
+add_recipe(lda_rec)
+
+qda_wkfl_final <-last_fit(qda_wf,split=data_split)
+tab_result<-qda_wkfl_final %>% collect_predictions()
+
+qda_roc<- roc(tab_result$y,tab_result$.pred_yes) %>% auc()
+```
+
+La sensibilité du modèle est de `r round(100*(Table[2,2]/Table[3,2]),2)`% contre `r round(100*(Table[1,1]/Table[3,1]),2)`% pour la spécificité.
+
+
+## 3- Table de précisions
+
+  La table suivante présente les **précisions** en entraînement et test ainsi que l'**aire sous la courbe ROC** pour chacun de nos modèles, il sera mis à jour de façon automatique tout au long de notre travail.
+```{r}
+Prec1<-data.frame(
+  Modèles=c("LDA", "QDA"),
+  Précision_Train=c(lda_train_accuracy,qda_train_accuracy),
+  Précision_Test=c(lda_accuracy,qda_accuracy),
+  Aire_roc=c(lda_roc, qda_roc)
+)
+Prec1[,-1]<- Prec1[,-1] |> round(4)
+
+Prec1 |>  kable( caption ="Table de précision") |>  kable_styling(latex_options = c("striped", "hold_position"),position="center")
+
+```
+
+\newpage
+
+# III - Modèles de Support Vector Machine
+
+## 1- SVM Linéaire
+
+  Après optimisation via validation croisée, le paramètre **cost** optimal est $0.0131$.
+
+```{r}
+svm_lin_fit<-readRDS("svm_linear_final.rds")
+
+
+
+# Évaluer la performance du modèle en utilisant la précision
+#CF1<-confusionMatrix(data = test_pred$.pred_class, reference = test_data$y)
+#Table<-CF1$table
+
+tab<-augment(svm_lin_fit,new_data=test_data) |>  conf_mat(truth=y,estimat= .pred_class)
+Table<- tab$table |> addmargins()
+Table |> kable(caption = "Matrice de confusion - SVM Linéaire") |> 
+  add_header_above(c("Prediction"=1,"Realité "=2," "=1)) |>  kable_styling(bootstrap_options = c("hover","striped"),pos="c",full_width = F)
+
+
+#svm_lin_fit$fit$actions$model$spec$args$cost # cout
+
+svm_lin_trpred<-svm_lin_fit |> predict(train_data)
+lsvm_train_accuracy <- sum(svm_lin_trpred$.pred_class == train_data$y) / length(train_data$y)
+#lsvm_train_accuracy
+
+
+svm_lin_predictions <- predict(svm_lin_fit, test_data)
+lsvm_accuracy <- sum(svm_lin_predictions$.pred_class == test_data$y) / length(test_data$y)
+#lsvm_accuracy
+
+
+```
+
+```{r}
+Collect<-function(x){last_fit(x,split=data_split) %>% collect_predictions()}
+
+svm_rec<-recipe(y~., data=train_data)
+
+svm_linear_spec <- svm_poly(degree = 1) |> 
+set_mode("classification") |> 
+set_engine("kernlab") |> 
+  set_args(cost=tune())
+
+svm_linear_wf<- workflow() |> 
+  add_model(svm_linear_spec) |> 
+  add_recipe(svm_rec)
+
+svm_lin_tune<-readRDS("Resultat_svm_lin_tuning.rds")
+
+best_lin_svm<-select_best(svm_lin_tune,"accuracy")
+svm_lin_wf_final<-svm_linear_wf |>  finalize_workflow(best_lin_svm)
+
+svm_lin_result<-svm_lin_wf_final %>% Collect 
+
+svm_lin_roc<- roc(svm_lin_result$y,svm_lin_result$.pred_yes) %>% auc()
+```
+
+
+## 2- SVM Radial
+
+  Les paramètres optimaux sont: $1$ pour le **cost** et $0.25$ pour le **rbf_sigma**.
+  
+```{r}
+svm_rad_wf<-readRDS("Resultat_svm_tuning_complet.rds")
+svm_rad_fit<-readRDS("svm_radial_final.rds")
+
+
+tab<-augment(svm_rad_fit,new_data=test_data) |>  conf_mat(truth=y,estimat= .pred_class)
+Table<- tab$table |> addmargins()
+Table |> kable(caption = "Matrice de confusion - SVM Radial") |> 
+  add_header_above(c("Prediction"=1,"Realité "=2," "=1)) |>  kable_styling(bootstrap_options = c("hover","striped"),pos="c", full_width = F)
+
+
+#svm_lin_fit$fit$actions$model$spec$args$cost # cout
+
+svm_rad_trpred<-svm_rad_fit |> predict(train_data)
+rsvm_train_accuracy <- sum(svm_rad_trpred$.pred_class == train_data$y) / length(train_data$y)
+#lsvm_train_accuracy
+
+
+svm_rad_predictions <- predict(svm_rad_fit, test_data)
+rsvm_accuracy <- sum(svm_rad_predictions$.pred_class == test_data$y) / length(test_data$y)
+#lsvm_accuracy
+```
+
+```{r}
+svm_spec<-svm_rbf( cost=tune(),
+                   rbf_sigma = tune()
+  ) |> 
+  set_mode("classification") |>
+  set_engine("kernlab")
+
+svm_wf <-workflow() |> 
+  add_model(svm_spec) |> 
+  add_recipe(svm_rec)
+
+
+best_svm<-select_best(svm_rad_wf,"accuracy")
+svm_wf_final<-svm_wf |>  finalize_workflow(best_svm)
+
+svm_result<-svm_wf_final %>% Collect 
+
+svm_roc<- roc(svm_result$y,svm_result$.pred_yes) %>% auc()
+```
+
+
+## 3- Table de précisions:
+
+```{r}
+Prec1<-data.frame(
+  Modèles=c("LDA", "QDA", "SVM linéaire","SVM radial"),
+  Précision_Train=c(lda_train_accuracy,qda_train_accuracy,lsvm_train_accuracy,rsvm_train_accuracy),
+  Précision_Test=c(lda_accuracy,qda_accuracy,lsvm_accuracy,rsvm_accuracy),
+  Aire_roc=c(lda_roc, qda_roc, svm_lin_roc, svm_roc)
+)
+Prec1[,-1]<- Prec1[,-1] |> round(4)
+
+Prec1 |>  kable( caption ="Table de précision") |>  kable_styling(latex_options = c("striped", "hold_position"),position="center")
+
+```
+
+\newpage
+
+# IV- Modèle KNN
+
+  Le **nombre de voisins** optimal est de $38$.
+
+1- Matrice de confusion
+```{r}
+knn_fit <-readRDS("knn_best_final100.rds")
+
+tab<-augment(knn_fit,new_data=test_data) |>  conf_mat(truth=y,estimat= .pred_class)
+Table<- tab$table |> addmargins()
+Table |> kable(caption = "Matrice de confusion - KNN") |> 
+  add_header_above(c("Prediction"=1,"Realité "=2," "=1)) |>  kable_styling(bootstrap_options = c("hover","striped"),pos="c",full_width = F)
+
+
+#svm_lin_fit$fit$actions$model$spec$args$cost # cout
+
+knn_trpred<-knn_fit |> predict(train_data)
+knn_train_accuracy <- sum(knn_trpred$.pred_class == train_data$y) / length(train_data$y)
+#lsvm_train_accuracy
+
+
+knn_predictions <- predict(knn_fit, test_data)
+knn_accuracy <- sum(knn_predictions$.pred_class == test_data$y) / length(test_data$y)
+#lsvm_accuracy
+```
+
+```{r}
+knn_wf <-readRDS("knn_wf100.rds")
+knn_result<-knn_wf %>% Collect 
+
+knn_roc<- roc(knn_result$y,knn_result$.pred_yes) %>% auc()
+```
+
+
+
+## 2- Table de précisions:
+
+```{r}
+Prec1<-data.frame(
+  Modèles=c("LDA", "QDA", "SVM linéaire","SVM radial", "KNN"),
+  Précision_Train=c(lda_train_accuracy,qda_train_accuracy,lsvm_train_accuracy,rsvm_train_accuracy,knn_train_accuracy),
+  Précision_Test=c(lda_accuracy,qda_accuracy,lsvm_accuracy,rsvm_accuracy,knn_accuracy),
+    Aire_roc=c(lda_roc, qda_roc, svm_lin_roc, svm_roc,knn_roc)
+)
+Prec1[,-1]<- Prec1[,-1] |> round(4)
+
+Prec1 |>  kable( caption ="Table de précision") |>  kable_styling(latex_options = c("striped", "hold_position"),position="center")
+
+```
+
+\newpage
+
+# V- Arbre CART
+
+  La valeur optimale du paramètre **cost_complexity** est de $0.00631$.
+
+## 1- Matrice de confusion
+
+```{r}
+
+tree_spec <- decision_tree() |>  
+  set_engine("rpart") |>  
+  set_mode("classification")
+
+# workflow avec paramètres à choisir
+tune_tree_wf <- workflow() |>  
+  add_model(tree_spec |>  
+              set_args(cost_complexity = tune())
+            ) |> 
+  add_recipe(svm_rec)
+
+tree_tune_res<-readRDS("Resultat_arbre_tuning.rds")
+
+best_cost_complexity <- select_best(tree_tune_res,"accuracy")
+
+final_tune_tree_wf <- tune_tree_wf %>% 
+  finalize_workflow(best_cost_complexity)
+
+tree_fit<-final_tune_tree_wf|> fit(data=train_data)
+
+tab<-augment(tree_fit,new_data=test_data) |>  conf_mat(truth=y,estimat= .pred_class)
+Table<- tab$table |> addmargins()
+Table |> kable(caption = "Matrice de confusion - Tree") |> 
+  add_header_above(c("Prediction"=1,"Realité "=2," "=1)) |>  kable_styling(bootstrap_options = c("hover","striped"),pos="c", stripe_color = "gray!6", full_width = F)
+
+```
+
+```{r}
+tree_result<-final_tune_tree_wf %>% Collect 
+
+tree_roc<- roc(tree_result$y,tree_result$.pred_yes) %>% auc()
+```
+
+
+## 2- ARBRE
+
+```{r}
+tree_fit1 <- final_tune_tree_wf %>% last_fit(data_split)
+tree_fit1 %>% 
+  extract_fit_engine() %>% 
+  rpart.plot::prp(type = 0, extra = 1, split.box.col = "lightblue",
+                  roundint = FALSE)
+```
+
+
+
+## 3- Table de précisions:
+
+```{r}
+tree_trpred<-tree_fit |> predict(train_data)
+tree_train_accuracy <- sum(tree_trpred$.pred_class == train_data$y) / length(train_data$y)
+#lsvm_train_accuracy
+
+
+tree_predictions <- predict(tree_fit, test_data)
+tree_accuracy <- sum(tree_predictions$.pred_class == test_data$y) / length(test_data$y)
+#lsvm_accuracy
+
+
+Prec1<-data.frame(
+  Modèles=c("LDA", "QDA", "SVM linéaire","SVM radial", "KNN", "Tree"),
+  Précision_Train=c(lda_train_accuracy,qda_train_accuracy,lsvm_train_accuracy,rsvm_train_accuracy,knn_train_accuracy,tree_train_accuracy),
+  Précision_Test=c(lda_accuracy,qda_accuracy,lsvm_accuracy,rsvm_accuracy,knn_accuracy,tree_accuracy),
+  Aire_roc=c(lda_roc, qda_roc, svm_lin_roc, svm_roc,knn_roc,tree_roc)
+)
+Prec1[,-1]<- Prec1[,-1] |> round(4)
+
+Prec1 |>  kable( caption ="Table de précision") |>  kable_styling(latex_options = c("striped", "hold_position"),position="center")
+
+```
+
+
+\newpage 
+
+# VI- Random Forest 
+
+  Les valeurs optimales des paramètres sont : $500$ pour le **nombre d'arbre**, $12$ pour le nombre de prédicteurs par noeud (**mtry**) et $40$ pour le **min_n**.
+
+## 1- Matrice de Confusion
+
+```{r}
+rf_fit<-readRDS("rff_train_final.rds")
+
+tab<-augment(rf_fit,new_data=test_data) |>  conf_mat(truth=y,estimat= .pred_class)
+Table<- tab$table |> addmargins()
+Table |> kable(caption = "Matrice de confusion - RandomForest") |> 
+  add_header_above(c("Prediction"=1,"Realité "=2," "=1)) |>  kable_styling(bootstrap_options = c("hover","striped"),pos="c", stripe_color = "gray!6", full_width = F)
+
+
+
+
+rf_trpred<-rf_fit |> predict(train_data)
+rf_train_accuracy <- sum(rf_trpred$.pred_class == train_data$y) / length(train_data$y)
+#lsvm_train_accuracy
+
+
+rf_predictions <- predict(rf_fit, test_data)
+rf_accuracy <- sum(rf_predictions$.pred_class == test_data$y) / length(test_data$y)
+#lsvm_accuracy
+```
+
+```{r}
+random_forest_spec <- rand_forest(mtry = tune(), min_n = tune(), trees = tune()) %>% 
+  set_engine("randomForest", importance = TRUE) %>% 
+  set_mode("classification")
+
+
+tune_rf_wf <- workflow() %>% 
+  add_model(random_forest_spec) %>% 
+  add_recipe(svm_rec)
+
+rf_param <- extract_parameter_set_dials(tune_rf_wf) %>% 
+  update(mtry = mtry(c(1,16)), trees = trees(c(50,500)))
+
+rf_tune_res<-readRDS("Resultat_rfff_tuning.rds")
+best_rf_parameters <- select_best(rf_tune_res,"accuracy")
+
+final_tune_rf_wf <- tune_rf_wf %>% 
+  finalize_workflow(best_rf_parameters)
+
+
+rf_result<-final_tune_rf_wf %>% Collect 
+
+rf_roc<- roc(rf_result$y,rf_result$.pred_yes) %>% auc()
+```
+
+
+## 2- Table de précisions:
+
+```{r}
+Prec1<-data.frame(
+  Modèles=c("LDA", "QDA", "SVM linéaire","SVM radial", "KNN", "Tree", "RForest"),
+  Précision_Train=c(lda_train_accuracy,qda_train_accuracy,lsvm_train_accuracy,rsvm_train_accuracy,knn_train_accuracy,tree_train_accuracy,rf_train_accuracy),
+  Précision_Test=c(lda_accuracy,qda_accuracy,lsvm_accuracy,rsvm_accuracy,knn_accuracy,tree_accuracy,rf_accuracy),
+  Aire_roc=c(lda_roc, qda_roc, svm_lin_roc, svm_roc,knn_roc,tree_roc,rf_roc)
+)
+Prec1[,-1]<- Prec1[,-1] |> round(4)
+
+Prec1 |>  kable( caption ="Table de précision") |>  kable_styling(latex_options = c("striped", "hold_position"),position="center")
+
+```
+
+
+\newpage
+
+# VII- Boosting
+
+  Valeurs optimales:
+  
+- nombre d'arbres (**trees**): $2000$
+- profondeur (**tree_depth**): $15$
+- **learn_rate**: $0.001$
+- **loss_reduction**:  $1.e-10$
+- **sample_size**: $0.1$
+
+
+## 1- Matrice de Confusion
+
+```{r}
+boost_fit<-readRDS("boost_fit.rds")
+
+tab<-augment(boost_fit,new_data=test_data) |>  conf_mat(truth=y,estimat= .pred_class)
+Table<- tab$table |> addmargins()
+Table |> kable(caption = "Matrice de confusion - Boosting") |> 
+  add_header_above(c("Prediction"=1,"Realité "=2," "=1)) |>  kable_styling(bootstrap_options = c("hover","striped"),pos="c", stripe_color = "gray!6", full_width = F)
+
+
+#svm_lin_fit$fit$actions$model$spec$args$cost # cout
+
+boost_trpred<-boost_fit |> predict(train_data)
+boost_train_accuracy <- sum(boost_trpred$.pred_class == train_data$y) / length(train_data$y)
+#lsvm_train_accuracy
+
+
+boost_predictions <- predict(boost_fit, test_data)
+boost_accuracy <- sum(boost_predictions$.pred_class == test_data$y) / length(test_data$y)
+#lsvm_accuracy
+```
+
+```{r}
+boost_rec<-recipe(y~., data=train_data) |>   
+  step_normalize(all_numeric_predictors()) |>  
+  step_dummy(all_nominal_predictors())
+
+boost_spec<- boost_tree(
+  trees = tune(), 
+  tree_depth = tune(), 
+  learn_rate = tune(), 
+  loss_reduction = tune(), 
+  sample_size = tune()
+) %>% 
+  set_engine("xgboost") |> 
+  set_mode("classification")
+
+
+boost_wf <- workflow() |>  
+  add_recipe(boost_rec) |>  
+  add_model(boost_spec)
+
+boost_res<-readRDS( "Resultat_boosting_tuning.rds")
+best_boost<-select_best(boost_res,"accuracy")
+boost_wf_final<-boost_wf %>% finalize_workflow(best_boost)
+
+boost_result<-boost_wf_final %>% Collect 
+
+boost_roc<- roc(boost_result$y,boost_result$.pred_yes) %>% auc()
+```
+
+
+## 2- Table de précisions:
+
+```{r}
+Prec1<-data.frame(
+  Modèles=c("LDA", "QDA", "SVM linéaire","SVM radial", "KNN", "Tree", "RForest","Boosting"),
+  Précision_Train=c(lda_train_accuracy,qda_train_accuracy,lsvm_train_accuracy,rsvm_train_accuracy,knn_train_accuracy,tree_train_accuracy,rf_train_accuracy,boost_train_accuracy),
+  Précision_Test=c(lda_accuracy,qda_accuracy,lsvm_accuracy,rsvm_accuracy,knn_accuracy,tree_accuracy,rf_accuracy,boost_accuracy),
+  Aire_roc=c(lda_roc, qda_roc, svm_lin_roc, svm_roc,knn_roc,tree_roc,rf_roc, boost_roc)
+)
+Prec1[,-1]<- Prec1[,-1] |> round(4)
+
+Prec1 |>  kable( caption ="Table de précision") |>  kable_styling(latex_options = c("striped", "hold_position"),position="center")
+
+```
+
+\newpage
+
+# VIII- Logit
+
+  Le choix du seuil optimal dépend du taux de précisions atteint selon les valeurs du seuil. Le graphique suivant permet d'identifier ce seuil.
+
+```{r}
+logit<- glm(y~., data=train_data, family = binomial(link = logit))
+
+tab<- predict(logit, newdata = test_data, type = "response")
+log_auc <- auc(roc(test_data$y, tab))
+
+Logit_df<-data.frame(
+  seuil=NULL,
+  Précision= NULL
+)
+
+vecteur <- seq(0, 1, by = 0.05)
+for (threshold in vecteur) {
+  class_predictions <- ifelse(tab > threshold, "yes", "no")
+  logit_acc<-mean(test_data$y==class_predictions)
+  i<- nrow(Logit_df)+1
+  Logit_df[i,1]<-threshold
+  Logit_df[i,2]<-round(logit_acc,4)
+}
+
+colnames(Logit_df)<-c("Seuil","Précision")
+
+ggplot(data = Logit_df, aes(x = Seuil, y = Précision, color = Précision)) + 
+geom_point() + 
+  geom_line() +
+  scale_y_continuous(limits = c(0.5,1))+
+  labs(title = "Graphique précision Logit")
+
+
+```
+
+  
+```{r}
+t(Logit_df[c(5:15),]) |> kable( caption ="Table de choix seuil -Logit") |>  kable_styling(latex_options = c("striped", "hold_position"),position="center",full_width = F)
+```
+
+  Le seuil optimal est de $0.4$.
+
+## 1- Matrice de confusion
+```{r}
+
+threshold<-0.4
+class_predictions <- ifelse(tab > threshold, "yes", "no")
+logit_acc<-mean(test_data$y==class_predictions)
+
+
+tab <- table(test_data$y, class_predictions)
+tab |> addmargins() |>  kable(caption = "Matrice de confusion - Logit") |> 
+  add_header_above(c("Réalité"=1,"Prédiction"=2," "=1)) |>  kable_styling(bootstrap_options = c("hover","striped"),pos="c", stripe_color = "gray!6", full_width = F)
+
+
+
+
+
+tab_train<- predict(logit, newdata = train_data, type = "response")
+class_t_predictions <- ifelse(tab_train > threshold, "yes", "no")
+logit_train_acc<-mean(train_data$y==class_predictions)
+```
+
+
+
+## 2- Table de précisions
+
+```{r}
+Prec1<-data.frame(
+  Modèles=c("LDA", "QDA", "SVM linéaire","SVM radial", "KNN", "Tree", "RForest","Boosting","Logit"),
+  Précision_Train=c(lda_train_accuracy,qda_train_accuracy,lsvm_train_accuracy,rsvm_train_accuracy,knn_train_accuracy,tree_train_accuracy,rf_train_accuracy,boost_train_accuracy,logit_train_acc),
+  Précision_Test=c(lda_accuracy,qda_accuracy,lsvm_accuracy,rsvm_accuracy,knn_accuracy,tree_accuracy,rf_accuracy,boost_accuracy,logit_acc),
+  Aire_roc=c(lda_roc, qda_roc, svm_lin_roc, svm_roc,knn_roc,tree_roc,rf_roc, boost_roc,log_auc)
+)
+Prec1[,-1]<- Prec1[,-1] |> round(4)
+
+Prec1 |>  kable( caption ="Table de précision") |>  kable_styling(latex_options = c("striped", "hold_position"),position="center")
+
+```
+
+\newpage
+
+# IX- Probit
+
+  Le choix du seuil optimal dépend du taux de précisions atteint selon les valeurs du seuil. Le graphique suivant permet d'identifier ce seuil.
+
+```{r}
+probit<- glm(y~., data=train_data, family = binomial(link = probit))
+
+tab<- predict(probit, newdata = test_data, type = "response")
+prob_auc <- auc(roc(test_data$y, tab))
+#View(tab)
+probit_df<-data.frame(
+  seuil=NULL,
+  Précision= NULL
+)
+
+vecteur <- seq(0, 1, by = 0.05)
+for (threshold in vecteur) {
+  class_predictions <- ifelse(tab > threshold, "yes", "no")
+  probit_acc<-mean(test_data$y==class_predictions)
+  i<- nrow(probit_df)+1
+  probit_df[i,1]<-threshold
+  probit_df[i,2]<-round(probit_acc,4)
+}
+
+colnames(probit_df)<-c("Seuil","Précision")
+
+ggplot(data = probit_df, aes(x = Seuil, y = Précision, color = Précision)) + 
+geom_point() + 
+  geom_line() +
+  scale_y_continuous(limits = c(0.5,1))+
+  labs(title = "Graphique précision Probit")
+
+```
+
+
+```{r}
+t(probit_df[c(5:15),]) |> kable( caption ="Table de choix seuil- Probit") |>  kable_styling(latex_options = c("striped", "hold_position"),position="center",full_width = F)
+```
+
+   Le seuil optimal en probit est de $O.35$
+   
+## 1- Matrice de confusion
+```{r}
+
+threshold<-0.35
+class_predictions <- ifelse(tab > threshold, "yes", "no")
+probit_acc<-mean(test_data$y==class_predictions)
+
+
+tab <- table(test_data$y, class_predictions)
+tab |> addmargins() |>  kable(caption = "Matrice de confusion - Probit") |> 
+  add_header_above(c("Réalité"=1,"Prédiction"=2," "=1)) |>  kable_styling(bootstrap_options = c("hover","striped"),pos="c", stripe_color = "gray!6", full_width = F)
+
+
+
+
+
+tab_train<- predict(probit, newdata = train_data, type = "response")
+class_t_predictions <- ifelse(tab_train > threshold, "yes", "no")
+probit_train_acc<-mean(train_data$y==class_predictions)
+```
+
+## 2- Table de précisions:
+
+```{r}
+Prec1<-data.frame(
+  Modèles=c("LDA", "QDA", "SVM linéaire","SVM radial", "KNN", "Tree", "RForest","Boosting","Logit", "Probit"),
+  Précision_Train=c(lda_train_accuracy,qda_train_accuracy,lsvm_train_accuracy,rsvm_train_accuracy,knn_train_accuracy,tree_train_accuracy,rf_train_accuracy,boost_train_accuracy,logit_train_acc,probit_train_acc),
+  Précision_Test=c(lda_accuracy,qda_accuracy,lsvm_accuracy,rsvm_accuracy,knn_accuracy,tree_accuracy,rf_accuracy,boost_accuracy,logit_acc,probit_acc),
+  Aire_roc=c(lda_roc, qda_roc, svm_lin_roc, svm_roc,knn_roc,tree_roc,rf_roc, boost_roc,log_auc,prob_auc)
+)
+Prec1[,-1]<- Prec1[,-1] |> round(4)
+
+Prec1 |>  kable( caption ="Table de précision") |>  kable_styling(latex_options = c("striped", "hold_position"),position="center")
+
+```
+
+# Conclusion
+
+La modèle ayant le pouvoir prédicteur global le plus faible est la **QDA** tandis que celui sur le fait de souscrire à un dépôt à terme (modalité $yes$) est l'**Arbre CART**.
+En s'appuyant sur le critère de la précision, le modèle le plus adéquat pour prédire le fait qu'un client souscrive ou non à un dépôt à terme du fait de la campagne est le **Random Forrest**, de plus, il présente la plus forte valeur de l'aire sous la courbe ROC (indicateur de la capacité du modèle à prédire les $yes$, classe minoritaire ici). Mais des modèles plus simples à construire et nécessitant moins de temps de  calcul tels que le **Logit**, **Probit** ou encore la **LDA** permettent d'obtenir des niveaux de performances presque pareil.

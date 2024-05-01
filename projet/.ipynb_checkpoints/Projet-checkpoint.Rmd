@@ -1,0 +1,442 @@
+---
+title: "Projet"
+output: pdf_document
+date: "2023-03-07"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, packages}
+library(readr)
+library(rsample)
+library(tidymodels)
+library(discrim)
+library(caret)
+library(rpart)
+library(randomForest)
+library(xgboost)
+library(doParallel)
+```
+
+```{r, Bases}
+
+train<-read.csv2("train.csv", stringsAsFactors = TRUE)
+test<- read.csv2("test.csv", stringsAsFactors = TRUE)
+summary(train)
+```
+```{r}
+set.seed(1)
+communs <- merge(test, train)
+test2<-test[order(test$age),]
+sum(communs==test2)
+all(test[2,]==train[2,]) == TRUE
+```
+```{r}
+compte=0
+for (i in 1:length(test$age)) {
+  ligne<- test[i,]
+  for (x in 1:length(train$age)) {
+    ligne2<-train[x,]
+    compte0<-compte
+    if (any(ligne==ligne2)==FALSE) {compte<-compte}
+    else  {compte<-compte+1}
+    if (compte0<compte) break
+  }
+}
+#compte
+if(compte==length(test$age)) print("Test est un sous ensemble de train")
+```
+
+```{r, échantillonnage}
+data_split <- train |>  initial_split(prop = 2/3)
+test_data <- data_split |>  testing()
+train_data <- data_split |>  training()
+```
+
+# LDA
+```{r}
+# Modèle 
+lda_spec <- discrim_linear() |> 
+  set_mode("classification") |> 
+  set_engine("MASS")
+#Classification 
+lda_fit<- lda_spec |> 
+  fit(y~.,data=train_data)
+# Matrice de confusion
+tab<-augment(lda_fit,new_data=test_data) |>  conf_mat(truth=y,estimat= .pred_class)
+tab$table |> addmargins()
+errr<-tab$table[1,2]+tab$table[2,1]
+round(100*(errr/length(test_data$age)),2)
+# Précision
+lda_predictions <- predict(lda_fit, test_data)
+lda_accuracy <- sum(lda_predictions$.pred_class == test_data$y) / length(test_data$y)
+lda_accuracy
+
+
+```
+
+# QDA
+
+```{r}
+# Modèle 
+qda_spec <- discrim_quad() |> 
+  set_mode("classification") |> 
+  set_engine("MASS")
+#Classification 
+qda_fit<- qda_spec |> 
+  fit(y~.,data=train_data)
+# Matrice de confusion
+tab<-augment(qda_fit,new_data=test_data) |>  conf_mat(truth=y,estimat= .pred_class)
+tab$table |> addmargins()
+errr<-tab$table[1,2]+tab$table[2,1]
+round(100*(errr/length(test_data$age)),2)
+
+# Précision
+qda_predictions <- predict(qda_fit, test_data)
+qda_accuracy <- sum(qda_predictions$.pred_class == test_data$y) / length(test_data$y)
+qda_accuracy
+```
+
+# SVM
+
+```{r}
+# Rectte
+svm_rec<-recipe(y~., data=train_data)
+#Modele
+svm_spec<-svm_rbf( cost=tune(),
+                   rbf_sigma = tune()
+  ) |> 
+  set_mode("classification") |>
+  set_engine("kernlab")#a cause de la taille de la base 
+# Workflow
+svm_wf <-workflow() |> 
+  add_model(svm_spec) |> 
+  add_recipe(svm_rec)
+```
+
+```{r, validation croisée}
+df_vc<-vfold_cv(train_data,v=5, strata = y)
+```
+
+
+```{r, critère de choix de paramètres}
+roc_res<-metric_set(roc_auc, 
+                    accuracy) #essayer à la fin avec roc_auc
+  
+```
+
+```{r, grillle de choix des paramètres}
+svm_param<-svm_wf |> 
+  parameters()
+
+start_grid<- svm_param |> 
+  update(
+  cost=cost(c(-2,2)),
+  rbf_sigma=rbf_sigma(c(0.25,0.75),trans=NULL)) |> 
+  grid_regular(levels = 3)
+```
+
+```{r, tunage}
+ncore=parallel::detectCores(logical = TRUE)
+library(doParallel)
+registerDoParallel(cores = ncore - 1)
+system.time( svm_tune <-svm_wf |> 
+tune_grid(resamples = df_vc, grid = start_grid, metrics = roc_res))
+
+```
+
+```{r, sauvegarde et test chargement}
+saveRDS(svm_tune, "Resultat_svm_tuning.rds")
+svm_tune<- readRDS("Resultat_svm_tuning.rds")
+saveRDS(svm_tune, "Resultat_svm_tuning_complet.rds",ascii = TRUE)
+cloness<-readRDS("Resultat_svm_tuning_complet.rds")
+str(svm_tune)
+str(clone)
+svm_tune |> collect_metrics()
+```
+
+
+```{r, finalisation du wf}
+best_svm<-select_best(svm_tune,"accuracy")
+svm_wf_final<-svm_wf %>% finalize_workflow(best_svm)
+svm_fit<-svm_wf_final |> fit(data=train_data)
+# Sauvegarder le modèle sur votre disque dur
+saveRDS(svm_fit, "svm_radial_final.rds")
+
+
+#test sur les données tests
+svm_fit %>%
+  predict(test_data) %>%
+  bind_cols(test_data) %>%
+  metrics(truth = y, estimate = .pred_class)
+
+#alternative
+# Obtenir les prédictions sur l'ensemble de test
+test_pred <- svm_fit %>% predict(new_data = test_data)
+
+# Évaluer la performance du modèle en utilisant la précision
+confusionMatrix(data = test_pred$.pred_class, reference = test_data$y)
+
+```
+
+#knn
+
+```{r}
+knn_model<-nearest_neighbor() %>% 
+    set_mode("classification") %>% 
+  set_engine("kknn") %>% 
+  set_args(neighbors=tidymodels::tune())
+
+
+knn_wf<-workflow() %>% 
+  add_model(knn_model) %>% 
+  add_recipe(svm_rec)
+
+
+knn_grid<-grid_regular(neighbors(c(100,200))  ,levels=50)
+
+```
+
+```{r}
+system.time(tune_res_knn<-tune_grid(knn_wf,resamples=df_vc  ,grid=knn_grid))
+saveRDS(tune_res_knn, "Resultat_KNNFF_tuning.rds")
+```
+
+```{r}
+tune_res_knn |> show_best("accuracy")
+autoplot(tune_res_knn)
+```
+```{r}
+tune_res_knn |> collect_metrics()
+knn_best<-tune_res_knn |>  select_best(metric="accuracy")
+knn_final_wf<-knn_wf |>  finalize_workflow(knn_best)
+knn_best_fit<-knn_final_wf |> fit(data=train_data)
+# Sauvegarder le modèle sur votre disque dur
+saveRDS(knn_best_fit, "knn_best_final.rds")
+
+```
+
+```{r}
+A<-readRDS("Resultat_knn_tuning.rds")
+B<-readRDS("Resultat_KNNFF_tuning.rds")
+C<-readRDS("Resultat_KNNF_tuning.rds")
+D<-readRDS("Resultat_knn100_tuning.rds")
+autoplot(A)
+A |> show_best("accuracy") #0.8989714- 35
+autoplot(B)
+B |> show_best("accuracy") #0.8978434 -100
+autoplot(D)
+
+```
+
+
+```{r}
+knn_10_wf<-knn_wf |> finalize_workflow(nearest_neighbor(neighbors = 10))
+knn_10_fit<-knn_final_wf |> fit(data=train_data)
+
+
+
+knn_15_wf<-knn_wf |> finalize_workflow(nearest_neighbor(neighbors = 15))
+knn_15_fit<-knn_final_wf |> fit(data=train_data)
+```
+
+```{r}
+# Obtenir les prédictions sur l'ensemble de test
+test_pred_best <- knn_best_fit %>% predict(new_data = test_data)
+# Évaluer la performance du modèle en utilisant la précision
+confusionMatrix(data = test_pred_best$.pred_class, reference = test_data$y)
+
+
+# Obtenir les prédictions sur l'ensemble de test
+test_pred_10 <- knn_10_fit %>% predict(new_data = test_data)
+
+# Évaluer la performance du modèle en utilisant la précision
+confusionMatrix(data = test_pred_10$.pred_class, reference = test_data$y)
+
+
+# Obtenir les prédictions sur l'ensemble de test
+test_pred_15<- knn_15_fit %>% predict(new_data = test_data)
+
+# Évaluer la performance du modèle en utilisant la précision
+confusionMatrix(data = test_pred_15$.pred_class, reference = test_data$y)
+#ON retient le 15??? plus faible knn
+```
+#svm linéaire
+
+```{r}
+svm_linear_spec <- svm_poly(degree = 1) |> 
+set_mode("classification") |> 
+set_engine("kernlab") |> 
+  set_args(cost=tune())
+
+svm_linear_wf<- workflow() |> 
+  add_model(svm_linear_spec) |> 
+  add_recipe(svm_rec)
+
+svm_linear_grid <- grid_regular(cost(), levels = 5)
+
+system.time(tune_res <- tune_grid(
+svm_linear_wf,
+resamples = df_vc,
+grid = svm_linear_grid,
+metrics = roc_res
+))
+
+
+saveRDS(tune_res, "Resultat_svm_lin_tuning.rds")
+
+
+tune_res |> collect_metrics()
+
+best_lin_svm<-select_best(tune_res,"accuracy")
+svm_lin_wf_final<-svm_linear_wf %>% finalize_workflow(best_lin_svm)
+svm_linear_fit<- svm_lin_wf_final|> fit(data=train_data)
+# Sauvegarder le modèle sur votre disque dur
+saveRDS(svm_linear_fit, "svm_linear_final.rds")
+
+#alternative
+# Obtenir les prédictions sur l'ensemble de test
+test_pred <- svm_linear_fit %>% predict(new_data = test_data)
+
+# Évaluer la performance du modèle en utilisant la précision
+confusionMatrix(data = test_pred$.pred_class, reference = test_data$y)
+```
+
+# ARbre de décision
+
+```{r}
+tree_spec <- decision_tree() |>  
+  set_engine("rpart") |>  
+  set_mode("classification")
+
+# workflow avec paramètres à choisir
+tune_tree_wf <- workflow() |>  
+  add_model(tree_spec |>  
+              set_args(cost_complexity = tune())
+            ) |> 
+  add_recipe(svm_rec)
+
+# valeurs à tester
+cost_complexity_grid <- grid_regular(cost_complexity(range = c(-5,-0.1)), 
+                                     levels = 15)
+
+system.time(tree_tune_res <- tune_grid(
+  tune_tree_wf,
+  resamples = df_vc, 
+  grid = cost_complexity_grid,
+  metrics = roc_res) )
+
+saveRDS(tree_tune_res, "Resultat_arbre_tuning.rds")
+
+
+#autoplot(tree_tune_res)
+tree_tune_res %>% show_best("accuracy")
+best_cost_complexity <- select_best(tree_tune_res,"accuracy")
+
+final_tune_tree_wf <- tune_tree_wf %>% 
+  finalize_workflow(best_cost_complexity)
+
+
+tree_fit <- final_tune_tree_wf %>% last_fit(data_split)
+tree_fit %>% collect_metrics() 
+tree_fit %>% collect_predictions() 
+tree_fit %>% collect_predictions() %>% roc_curve(y, .pred_no) %>% autoplot()
+
+
+tree_fit %>% 
+  extract_fit_engine() %>% 
+  rpart.plot::prp(type = 0, extra = 1, split.box.col = "lightblue",
+                  roundint = FALSE)
+```
+
+# Random Forest
+
+```{r}
+random_forest_spec <- rand_forest(mtry = tune(), min_n = tune(), trees = tune()) %>% 
+  set_engine("randomForest", importance = TRUE) %>% 
+  set_mode("classification")
+
+
+tune_rf_wf <- workflow() %>% 
+  add_model(random_forest_spec) %>% 
+  add_recipe(svm_rec)
+
+rf_param <- extract_parameter_set_dials(tune_rf_wf) %>% 
+  update(mtry = mtry(c(1,16)), trees = trees(c(50,500)))
+
+
+registerDoParallel(cores = ncore - 1)
+system.time(
+  rf_tune_res <- tune_grid(
+    tune_rf_wf, 
+    resamples = df_vc, 
+    grid = grid_regular(rf_param, levels = c(mtry = 16, trees = 3, min_n = 4)), 
+    metrics = roc_res
+)
+)
+
+saveRDS(rf_tune_res, "Resultat_rfff_tuning.rds")
+```
+```{r}
+rf_tune_res<-readRDS("Resultat_rfff_tuning.rds")
+rf_tune_res |> show_best("accuracy")
+best_rf_parameters <- select_best(rf_tune_res,"accuracy")
+
+final_tune_rf_wf <- tune_rf_wf %>% 
+  finalize_workflow(best_rf_parameters)
+
+
+train_rf_model <- final_tune_rf_wf %>% fit(data = train_data)
+
+
+saveRDS(train_rf_model, "rff_train_final.rds")  
+```
+
+# Boosting
+
+```{r}
+boost_rec<-recipe(y~., data=train_data) |>   
+  step_normalize(all_numeric_predictors()) |>  
+  step_dummy(all_nominal_predictors())
+
+boost_spec<- boost_tree(
+  trees = tune(), 
+  tree_depth = tune(), 
+  learn_rate = tune(), 
+  loss_reduction = tune(), 
+  sample_size = tune()
+) %>% 
+  set_engine("xgboost") |> 
+  set_mode("classification")
+
+
+boost_wf <- workflow() |>  
+  add_recipe(boost_rec) |>  
+  add_model(boost_spec)
+
+
+
+registerDoParallel(cores = ncore-1)
+system.time(
+boost_res <- boost_wf |>  
+  tune_grid(
+    resamples = df_vc,
+    grid = grid_regular(extract_parameter_set_dials(boost_wf), levels = 2),
+    metrics = roc_res,
+  )
+)
+stopImplicitCluster()
+saveRDS(boost_res, "Resultat_boosting_tuning.rds")
+
+boost_res |> collect_metrics()
+
+best_boost<-select_best(boost_res,"accuracy")
+boost_wf_final<-boost_wf %>% finalize_workflow(best_boost)
+boost_fit<- boost_wf_final|> fit(data=train_data)
+saveRDS(boost_fit, "boost_fit.rds")
+
+```
+
+
