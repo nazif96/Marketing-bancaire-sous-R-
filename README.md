@@ -1,4 +1,4 @@
-# Projet Datamining - Prédiction de la souscription d'un dépôt à terme 
+# Projet Datamining - Prédiction de la souscription d'un dépôt à terme sous R 
 
 Ce projet vise à développer des modèles prédictifs pour déterminer la souscription d'un dépot à terme dans une institution financière.
 Différentes techniques de datamining ont été utilisées pour entraîner et évaluer plusieurs modèles sur les données accessible en ligne [lien](https://archive.ics.uci.edu/dataset/222/bank+marketing)
